@@ -5,13 +5,14 @@
 #include <pthread.h>
 #include <map>
 #include <vector>
+#include <chrono>
 using namespace std;
 #define err_exit(code, str) { cerr << str << ": " << strerror(code) \
 << endl; exit(EXIT_FAILURE); }
 map <int,int> map_res;
+map <int,int> map_r;
 int res=0;
 typedef void* (*func)(void* arg);
-pthread_mutex_t mutex;
 struct Param
 {
     int* array_ptr;
@@ -19,41 +20,29 @@ struct Param
 };
 void* mapf(void* arg){
     int err;
-    err = pthread_mutex_lock(&mutex);
-    if(err != 0)
-            err_exit(err, "Cannot lock mutex");
     Param* params = (Param*)arg;
 
     for(int i = 0; i <params->count_elements ; ++i)
     {
         map_res[params->array_ptr[i] ]+=1;
         
-    }
-    err = pthread_mutex_unlock(&mutex);
-    if(err != 0)
-        err_exit(err, "Cannot unlock mutex");
-    
+    }    
 }
 
 void* reducef(void* arg)
 {
-    int err;
-    err = pthread_mutex_lock(&mutex);
-    if(err != 0)
-            err_exit(err, "Cannot lock mutex");
     Param* params = (Param*)arg;
-     for(int i = 0; i < map_res.size(); ++i)
+     for(int i = 0; i < params->count_elements; ++i)
     {
-       res+= map_res[params->array_ptr[i] ]*params->array_ptr[i];
-        
+       res+= map_r[params->array_ptr[i] ]*params->array_ptr[i];   
     }
-        err = pthread_mutex_unlock(&mutex);
-    if(err != 0)
-        err_exit(err, "Cannot unlock mutex");
+
 }
 void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
 {
-
+    map_res.clear();
+    map_r.clear();
+    res=0;
     if(array->count_elements < nthreads)
     {
         nthreads = array->count_elements;
@@ -67,9 +56,6 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
     int count_elements_for_thread = array->count_elements / nthreads;
 
     int err;
-    err = pthread_mutex_init(&mutex, NULL);
-    if(err != 0)
-        err_exit(err, "Cannot initialize mutex");
     for(int i = 0; i < nthreads; i++)
     {
         params[i].count_elements = count_elements_for_thread;
@@ -97,16 +83,30 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
     }
     vector<int> keys;
     for (auto it = map_res.begin(); it != map_res.end(); it++) {
-        keys.push_back(it->first);
+        
+        if(map_r.count(it->first)==0)
+        {
+            keys.push_back(it->first);
+            map_r[it->first]=it->second;
+        }
+        else
+        {
+            map_r[it->first]+=it->second;
+        }
+    }
+
+     if(map_r.size() < nthreads)
+    {
+        nthreads = map_r.size() ;
     }
      for(int i = 0; i < nthreads; i++)
     {
-        params[i].count_elements = map_res.size()/nthreads;
-        params[i].array_ptr = &keys[map_res.size()*i];
+        params[i].count_elements = map_r.size()/nthreads;
+        params[i].array_ptr = &keys[map_r.size()/nthreads*i];
 
         if(i == nthreads - 1)
         {
-            params[i].count_elements += array->count_elements % nthreads;
+            params[i].count_elements += map_r.size() % nthreads;
         }
         // Создание потока
         err = pthread_create(&threads[i], NULL, reducefunc, (void*)&params[i]);
@@ -129,25 +129,16 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
     delete[] params;
     delete[] array;
     delete[] threads;
-    pthread_mutex_destroy(&mutex);
 }
 
 int main()
  {
-    int array_size=10;
-    int count_threads=5;
-
-    if(array_size <= 0 || count_threads <= 0)
+    int array_size=10000000;
+    if(array_size <= 0 )
     {
         cout << "неправильные параметры\n";
         exit(-1);
     }
-
-    if(array_size < count_threads)
-    {
-        count_threads = array_size;
-    }
-
     srand(time(NULL));
 
     int* array = new int[array_size];
@@ -155,11 +146,21 @@ int main()
     for(int i = 0; i < array_size; i++)
     {
         array[i] = (rand() % 10);
-        cout  << array[i] << '\n';
+        //cout  << array[i] << '\n';
     }
+    
+    for(int i=1;i<11;++i)
+    {
     Param* p=new Param;
     p->array_ptr=array;
     p->count_elements=array_size;
-    mapreduce(p,&mapf,&reducef,count_threads);
+        
+    auto begin= chrono::steady_clock::now();
+    mapreduce(p,&mapf,&reducef,i);
+    auto end= chrono::steady_clock::now();
+    auto time = chrono::duration_cast<std::chrono::microseconds>(end - begin);
+    cout<<"Потоков "<<i<<" time "<<time.count()<<endl;
+    }
     return 0;
 }
+
