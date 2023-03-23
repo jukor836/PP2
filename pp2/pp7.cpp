@@ -4,15 +4,19 @@
 #include <sys/types.h>
 #include <regex.h>
 #include <queue>
+#include <unordered_set>
 #include <string>
-#include <regex>
 #include <iostream>
 #define BUFSIZE 16384
+#define err_exit(code, str) { cerr << str << ": " << strerror(code) \
+    << endl; exit(EXIT_FAILURE); }
 using namespace std;
 pthread_mutex_t mutex;
+pthread_cond_t cond;
 size_t lr = 0;
-queue<string> sq;
-string cur;
+queue<char *> sq;
+unordered_set<char*> check;
+bool state=true;
 size_t filterit(void *ptr, size_t size, size_t nmemb, char *stream)
 {
   if ( (lr + size*nmemb) > BUFSIZE ) return BUFSIZE;
@@ -20,22 +24,11 @@ size_t filterit(void *ptr, size_t size, size_t nmemb, char *stream)
   lr += size*nmemb;
   return size*nmemb;
 }
-void* job(void* arg)
+void write(char* cur)
 {
-  FILE *fp;
-  char name[] = "/home/juja/pp2/my.txt";
-  (fp = fopen(name, "w"));
-  if (fp == NULL)
-  {
-    printf("Не удалось открыть файл");
-    getchar();
-    exit(EXIT_FAILURE);
-  }
-  CURL *curlHandle;
+  cout<<cur<<" "<<pthread_self()<<endl;
   char buffer[BUFSIZE];
-  regmatch_t amatch;
-  regex_t cregex;
-
+  CURL *curlHandle;
   curlHandle = curl_easy_init();
   curl_easy_setopt(curlHandle, CURLOPT_URL, cur);
   curl_easy_setopt(curlHandle, CURLOPT_FOLLOWLOCATION, 1);
@@ -43,75 +36,62 @@ void* job(void* arg)
   curl_easy_setopt(curlHandle, CURLOPT_WRITEDATA, buffer);
   int success = curl_easy_perform(curlHandle);
   curl_easy_cleanup(curlHandle);
-
   buffer[lr] = 0;
-  
-  regcomp(&cregex, " UTC", REG_NEWLINE);
+  regmatch_t amatch;
+  regex_t cregex;
+  regcomp(&cregex, "https://*", REG_NEWLINE);
   regexec(&cregex, buffer, 1, &amatch, 0);
-  int bi = amatch.rm_so;
-  while ( bi-- > 0 )
-    if ( memcmp(&buffer[bi], "<BR>", 4) == 0 ) break;
-
-  buffer[amatch.rm_eo] = 0;
-  printf("%s\n", &buffer[bi+4]);
-  fprintf(fp,"%s\n", &buffer[bi+4]);
-  fclose(fp);
+  {int bi = amatch.rm_so;
+  char buf[50];
+  for (int i=0;i<50;i++)
+  {
+    if(buffer[bi]=='\"') break;
+    buf[i]=buffer[bi];
+    bi++;
+  }
+  if(!check.count(buf))
+        sq.push(buf);
+  check.insert(cur);
+  //printf("%s\n", &buf);
+  }
   regfree(&cregex);
+
+    int err = pthread_cond_signal(&cond);
+    if(err != 0)
+    err_exit(err, "Cannot send signal");
   
 }
-regex rgx("((http|https|ftp):\\/\\/)?(([A-Z0-9][A-Z0-9_-]*)(\\.[A-Z0-9][A-Z0-9_-]*)+)");
 
-void read()
-{
-  string s;
-  FILE *fp;
-  char name[] = "/home/juja/pp2/my.txt";
-  (fp = fopen(name, "r"));
-  if (fp == NULL)
-  {
-    printf("Не удалось открыть файл");
-    getchar();
-    return ;
-  }
-  while(fscanf(fp, "%s", &s))
-  {
-    std::smatch m;
-    regex_search(s, m, rgx);
-    if(!m.empty())
-      sq.push(m[0]);
-
-  }
-
-}
 void* thread_job(void* arg)
 {
   int err;
-  while(!sq.empty())
-  {    
-    err = pthread_mutex_lock(&mutex);
-    if(err != 0)
-     { 
-      cout<<(err, "Cannot unlock mutex");
-      exit(EXIT_FAILURE);
-     }
-    cur=sq.front();
-    sq.pop();
-    job(NULL);
-    read();
-    err = pthread_mutex_unlock(&mutex);
-    
-    if(err != 0)
-     { 
-      cout<<(err, "Cannot unlock mutex");
-      exit(EXIT_FAILURE);
-     }  
+  while(!sq.empty()){
+    while(!sq.empty())
+    {
+      state=true;         
+      err = pthread_mutex_lock(&mutex);
+      if(err != 0)
+        err_exit(err, "Cannot lock mutex");
+      char* cur=sq.front();
+      sq.pop();
+      err = pthread_mutex_unlock(&mutex);
+      if(err != 0)
+        err_exit(err, "Cannot unlock mutex");
+      write(cur);
   }
-
+  state=false;
+  if(state){
+  err = pthread_cond_wait(&cond, &mutex);
+  if(err != 0)
+    err_exit(err, "Cannot wait on condition variable");
+  }
+  }
+  
 }
 int main()
 {
-  sq.push("http://example.com");
-  int err, nthreads=3;
+  sq.push("https://www.stroustrup.com");
+  int err, nthreads=5;
   pthread_t* threads = new pthread_t[nthreads];
   err = pthread_mutex_init(&mutex, NULL);
   if(err != 0)
@@ -119,6 +99,9 @@ int main()
     cout<< "Cannot initialize mutex";
     return 0;
   }
+  err = pthread_cond_init(&cond, NULL);
+  if(err != 0)
+      err_exit(err, "Cannot initialize condition variable");
   for(int i = 0; i < nthreads; i++)
     {
       
@@ -136,5 +119,6 @@ int main()
         pthread_join(threads[i], NULL);
     }
   pthread_mutex_destroy(&mutex);
+  pthread_cond_destroy(&cond);
   return 0;
 }
