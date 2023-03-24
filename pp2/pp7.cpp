@@ -40,22 +40,26 @@ void write(char* cur)
   regmatch_t amatch;
   regex_t cregex;
   regcomp(&cregex, "https://*", REG_NEWLINE);
-  regexec(&cregex, buffer, 1, &amatch, 0);
+  int eflag = 0;
+  char *ps=buffer;
+  while(regexec(&cregex, ps, 1, &amatch, eflag)==0){
   {int bi = amatch.rm_so;
   char buf[50];
   for (int i=0;i<50;i++)
   {
-    if(buffer[bi]=='\"') break;
-    buf[i]=buffer[bi];
+    if(ps[bi]=='\"') break;
+    buf[i]=ps[bi];
     bi++;
+    
   }
-  if(!check.count(buf))
+  if(check.count(buf)==0)
         sq.push(buf);
-  check.insert(cur);
-  //printf("%s\n", &buf);
-  }
+  ps+= amatch.rm_eo;
+  eflag = REG_NOTBOL;
+  //printf("%s\n", ps);
+  }}
   regfree(&cregex);
-
+  check.insert(cur);
     int err = pthread_cond_signal(&cond);
     if(err != 0)
     err_exit(err, "Cannot send signal");
