@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <string>
 #include <iostream>
+#include <chrono>
 #define BUFSIZE 16384
 #define err_exit(code, str) { cerr << str << ": " << strerror(code) \
     << endl; exit(EXIT_FAILURE); }
@@ -26,7 +27,8 @@ size_t filterit(void *ptr, size_t size, size_t nmemb, char *stream)
 }
 void write(char* cur)
 {
-  cout<<cur<<" "<<pthread_self()<<endl;
+
+  //cout<<cur<<" "<<pthread_self()<<endl;
   char buffer[BUFSIZE];
   CURL *curlHandle;
   curlHandle = curl_easy_init();
@@ -39,90 +41,149 @@ void write(char* cur)
   buffer[lr] = 0;
   regmatch_t amatch;
   regex_t cregex;
-  regcomp(&cregex, "https://*", REG_NEWLINE);
+  regmatch_t amatch2;
+  regex_t cregex2;
+  regcomp(&cregex, "<a href=\"*", REG_NEWLINE);
+  regcomp(&cregex2, "http*", REG_NEWLINE);
   int eflag = 0;
   char *ps=buffer;
-  while(regexec(&cregex, ps, 1, &amatch, eflag)==0){
-  {int bi = amatch.rm_so;
-  char buf[50];
-  for (int i=0;i<50;i++)
-  {
-    if(ps[bi]=='\"') break;
-    buf[i]=ps[bi];
-    bi++;
+  while(regexec(&cregex, ps, 1, &amatch, eflag)==0)
+  { 
+
+    int bi = amatch.rm_eo;
+    char buf[20]="";
+
+    for (int i=0;i<50;i++)
+    {
+      if(ps[bi]=='\"') break;
+      buf[i]=ps[bi];
+      bi++;
+    }
+    ps+= amatch.rm_eo+bi;
+    char b[80]="";
     
-  }
-  if(check.count(buf)==0)
-        sq.push(buf);
-  ps+= amatch.rm_eo;
-  eflag = REG_NOTBOL;
-  //printf("%s\n", ps);
-  }}
-  regfree(&cregex);
-  check.insert(cur);
+    char* curr=cur;
+    if(regexec(&cregex2, buf, 1, &amatch2, eflag)!=0)
+    {
+      int c=0;
+      for(c;curr[c]!='\0';++c)
+      {
+        b[c]=curr[c];
+      }
+      b[c]='/';
+      c++;
+
+      for(int i=0;buf[i]!='\0';++i)
+      {
+        b[c]=buf[i];
+        c++;
+      }
+      b[c]='\0';
+    }  
+    bool flag=false;
+
+   for (auto it = check.begin(); it != check.end(); it++) 
+    {
+
+      if( strcmp(*it,b) ==0)
+      {
+        flag=true;
+        break;
+      }
+    }
+    if(!flag&&strcmp("",b) !=0)
+     {
+
+       sq.push(strdup(b));
     int err = pthread_cond_signal(&cond);
     if(err != 0)
-    err_exit(err, "Cannot send signal");
-  
+      err_exit(err, "Cannot send signal");
+     }
+
+  }
+    regfree(&cregex);
+    check.insert(cur);
+    int err = pthread_cond_signal(&cond);
+    if(err != 0)
+      err_exit(err, "Cannot send signal");
+     
+
 }
 
 void* thread_job(void* arg)
 {
+
   int err;
-  while(!sq.empty()){
+  int stop=0;
     while(!sq.empty())
     {
-      state=true;         
+      
       err = pthread_mutex_lock(&mutex);
       if(err != 0)
         err_exit(err, "Cannot lock mutex");
+      if(sq.empty())
+      {
+        err = pthread_cond_wait(&cond,&mutex);
+        if(err != 0)
+          err_exit(err, "Cannot wait");
+      }
+
       char* cur=sq.front();
+      stop++;
       sq.pop();
       err = pthread_mutex_unlock(&mutex);
       if(err != 0)
         err_exit(err, "Cannot unlock mutex");
       write(cur);
+      if(stop>20)
+      break;
+    
   }
-  state=false;
-  if(state){
-  err = pthread_cond_wait(&cond, &mutex);
-  if(err != 0)
-    err_exit(err, "Cannot wait on condition variable");
-  }
-  }
-  
+ 
 }
 int main()
 {
-  sq.push("https://www.stroustrup.com");
-  int err, nthreads=5;
-  pthread_t* threads = new pthread_t[nthreads];
+  for(int j=2;j<10;++j)
+    {
+  int err;
+  pthread_t* threads = new pthread_t[j];
   err = pthread_mutex_init(&mutex, NULL);
   if(err != 0)
   {   
-    cout<< "Cannot initialize mutex";
+    std::cout<< "Cannot initialize mutex";
     return 0;
   }
   err = pthread_cond_init(&cond, NULL);
   if(err != 0)
       err_exit(err, "Cannot initialize condition variable");
-  for(int i = 0; i < nthreads; i++)
+
+      sq.push("https://www.stroustrup.com");
+
+        auto begin= chrono::steady_clock::now();
+  for(int i = 0; i < j; i++)
     {
+      
       
         // Создание потока
         err = pthread_create(&threads[i], NULL,thread_job , NULL);
         if(err != 0)
         {
-            cout << "Cannot create a thread: " << strerror(err) << endl;
+            std::cout << "Cannot create a thread: " << strerror(err) << endl;
         exit(-1);
         }
 
     }  
-    for(int i = 0; i < nthreads; ++i)
+    
+    
+    for(int i = 0; i < j; ++i)
     {
         pthread_join(threads[i], NULL);
     }
+     auto end= chrono::steady_clock::now();
+    auto time = chrono::duration_cast<std::chrono::microseconds>(end - begin);
+    std::cout<<"потоков "<<j-1<<" time "<<time.count()<<endl;
   pthread_mutex_destroy(&mutex);
   pthread_cond_destroy(&cond);
+  }
   return 0;
 }
