@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 #include <chrono>
+#include <ctime> 
 using namespace std;
 #define err_exit(code, str) { cerr << str << ": " << strerror(code) \
 << endl; exit(EXIT_FAILURE); }
@@ -19,16 +20,14 @@ struct Param
     int count_elements;
 };
 void* mapf(void* arg){
-    int err;
     Param* params = (Param*)arg;
-
     for(int i = 0; i <params->count_elements ; ++i)
     {
         map_res[params->array_ptr[i] ]+=1;
         
     }    
-}
 
+}
 void* reducef(void* arg)
 {
     Param* params = (Param*)arg;
@@ -40,6 +39,7 @@ void* reducef(void* arg)
 }
 void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
 {
+    unsigned int start_time =  clock(); 
     map_res.clear();
     map_r.clear();
     res=0;
@@ -56,6 +56,7 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
     int count_elements_for_thread = array->count_elements / nthreads;
 
     int err;
+
     for(int i = 0; i < nthreads; i++)
     {
         params[i].count_elements = count_elements_for_thread;
@@ -75,38 +76,25 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
         }
 
     }  
-
+ 
     // Ждем завершения всех созданных потоков
     for(int i = 0; i < nthreads; ++i)
     {
         pthread_join(threads[i], NULL);
     }
-    vector<int> keys;
-    for (auto it = map_res.begin(); it != map_res.end(); it++) {
-        
-        if(map_r.count(it->first)==0)
-        {
-            keys.push_back(it->first);
-            map_r[it->first]=it->second;
-        }
-        else
-        {
-            map_r[it->first]+=it->second;
-        }
+
+     if(map_res.size() < nthreads)
+    {
+        nthreads = map_res.size() ;
     }
 
-     if(map_r.size() < nthreads)
-    {
-        nthreads = map_r.size() ;
-    }
      for(int i = 0; i < nthreads; i++)
     {
-        params[i].count_elements = map_r.size()/nthreads;
-        params[i].array_ptr = &keys[map_r.size()/nthreads*i];
-
+        params[i].count_elements = map_res.size()/nthreads;
+        params[i].array_ptr = &map_res[map_res.size()/nthreads*i];
         if(i == nthreads - 1)
         {
-            params[i].count_elements += map_r.size() % nthreads;
+            params[i].count_elements += map_res.size() % nthreads;
         }
         // Создание потока
         err = pthread_create(&threads[i], NULL, reducefunc, (void*)&params[i]);
@@ -117,23 +105,27 @@ void mapreduce(Param* array,func mapfunc,func reducefunc,int nthreads)
         }
 
     }  
-
+   
     // Ждем завершения всех созданных потоков
     for(int i = 0; i < nthreads; ++i)
     {
         pthread_join(threads[i], NULL);
     }
 
-    cout << "Сумма всех элементов " <<res<<endl;;
+
+    //cout << "Сумма всех элементов " <<res<<endl;;
     
     delete[] params;
     delete[] array;
     delete[] threads;
+    unsigned int end_time = clock(); // конечное время
+    unsigned int time = end_time - start_time;
+    cout<<"Потоков "<<nthreads<<" time "<<time<<endl;
 }
 
 int main()
  {
-    int array_size=10000000;
+    int array_size=10000;
     if(array_size <= 0 )
     {
         cout << "неправильные параметры\n";
@@ -145,22 +137,19 @@ int main()
 
     for(int i = 0; i < array_size; i++)
     {
-        array[i] = (rand() % 10);
+        array[i] = (rand() % 19);
         //cout  << array[i] << '\n';
     }
     
-    for(int i=1;i<11;++i)
+    for(int i=1;i<6;++i)
     {
     Param* p=new Param;
     p->array_ptr=array;
     p->count_elements=array_size;
         
-    auto begin= chrono::steady_clock::now();
+
     mapreduce(p,&mapf,&reducef,i);
-    auto end= chrono::steady_clock::now();
-    auto time = chrono::duration_cast<std::chrono::microseconds>(end - begin);
-    cout<<"Потоков "<<i<<" time "<<time.count()<<endl;
+
     }
     return 0;
 }
-
